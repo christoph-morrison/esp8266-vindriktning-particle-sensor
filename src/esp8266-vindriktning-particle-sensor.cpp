@@ -47,57 +47,63 @@ bool shouldSaveConfig = false;
 Adafruit_BME280 bme; // I2C
 bool hasBme280 = false;
 
+// set to true if the autoconfig for Home Assistant should be send or not
+bool shouldSendHassAutoconfig = false;
+
+// MQTT topic prefix
+String mqttTopicPrefix = "hab/devices/sensors/environment/particle-sensor";
+
 void saveConfigCallback() {
     shouldSaveConfig = true;
 }
 
-void setup() {
-    Serial.begin(115200);
-    SerialCom::setup();
+void publishAutoConfig() {
+    char mqttPayload[2048];
+    DynamicJsonDocument device(256);
+    DynamicJsonDocument autoconfPayload(1024);
+    StaticJsonDocument<64> identifiersDoc;
+    JsonArray identifiers = identifiersDoc.to<JsonArray>();
 
-    Serial.println("\n");
-    Serial.println("Hello from esp8266-vindriktning-particle-sensor");
-    Serial.printf("Core Version: %s\n", ESP.getCoreVersion().c_str());
-    Serial.printf("Boot Version: %u\n", ESP.getBootVersion());
-    Serial.printf("Boot Mode: %u\n", ESP.getBootMode());
-    Serial.printf("CPU Frequency: %u MHz\n", ESP.getCpuFreqMHz());
-    Serial.printf("Reset reason: %s\n", ESP.getResetReason().c_str());
+    snprintf(MQTT_TOPIC_AUTOCONF_PM25_SENSOR, 127,  "%s/%X/pm25",   mqttTopicPrefix.c_str(), ESP.getChipId());
+    snprintf(MQTT_TOPIC_AUTOCONF_WIFI_SENSOR, 127,  "%s/%X/config", mqttTopicPrefix.c_str(), ESP.getChipId());
 
-    delay(3000);
+    identifiers.add(identifier);
 
-    snprintf(identifier, sizeof(identifier), "VINDRIKTNING-%X", ESP.getChipId());
-    snprintf(MQTT_TOPIC_AVAILABILITY, 127, "%s/%s/status", FIRMWARE_PREFIX, identifier);
-    snprintf(MQTT_TOPIC_STATE, 127, "%s/%s/state", FIRMWARE_PREFIX, identifier);
-    snprintf(MQTT_TOPIC_COMMAND, 127, "%s/%s/command", FIRMWARE_PREFIX, identifier);
+    device["identifiers"] = identifiers;
+    device["manufacturer"] = "Ikea";
+    device["model"] = "VINDRIKTNING";
+    device["name"] = identifier;
+    device["sw_version"] = "2021.08.0";
 
-    snprintf(MQTT_TOPIC_AUTOCONF_PM25_SENSOR, 127, "homeassistant/sensor/%s/%s_pm25/config", FIRMWARE_PREFIX, identifier);
-    snprintf(MQTT_TOPIC_AUTOCONF_WIFI_SENSOR, 127, "homeassistant/sensor/%s/%s_wifi/config", FIRMWARE_PREFIX, identifier);
+    autoconfPayload["device"] = device.as<JsonObject>();
+    autoconfPayload["availability_topic"] = MQTT_TOPIC_AVAILABILITY;
+    autoconfPayload["state_topic"] = MQTT_TOPIC_STATE;
+    autoconfPayload["name"] = identifier + String(" WiFi");
+    autoconfPayload["value_template"] = "{{value_json.wifi.rssi}}";
+    autoconfPayload["unique_id"] = identifier + String("_wifi");
+    autoconfPayload["unit_of_measurement"] = "dBm";
+    autoconfPayload["json_attributes_topic"] = MQTT_TOPIC_STATE;
+    autoconfPayload["json_attributes_template"] = "{\"ssid\": \"{{value_json.wifi.ssid}}\", \"ip\": \"{{value_json.wifi.ip}}\"}";
+    autoconfPayload["icon"] = "mdi:wifi";
 
-    WiFi.hostname(identifier);
+    serializeJson(autoconfPayload, mqttPayload);
+    mqttClient.publish(&MQTT_TOPIC_AUTOCONF_WIFI_SENSOR[0], &mqttPayload[0], true);
 
-    Config::load();
+    autoconfPayload.clear();
 
-    setupWifi();
-    setupOTA();
-    mqttClient.setServer(Config::mqtt_server, 1883);
-    mqttClient.setKeepAlive(10);
-    mqttClient.setBufferSize(2048);
-    mqttClient.setCallback(mqttCallback);
+    autoconfPayload["device"] = device.as<JsonObject>();
+    autoconfPayload["availability_topic"] = MQTT_TOPIC_AVAILABILITY;
+    autoconfPayload["state_topic"] = MQTT_TOPIC_STATE;
+    autoconfPayload["name"] = identifier + String(" PM 2.5");
+    autoconfPayload["unit_of_measurement"] = "μg/m³";
+    autoconfPayload["value_template"] = "{{value_json.pm25}}";
+    autoconfPayload["unique_id"] = identifier + String("_pm25");
+    autoconfPayload["icon"] = "mdi:air-filter";
 
-    Serial.printf("Hostname: %s\n", identifier);
-    Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+    serializeJson(autoconfPayload, mqttPayload);
+    mqttClient.publish(&MQTT_TOPIC_AUTOCONF_PM25_SENSOR[0], &mqttPayload[0], true);
 
-    if (bme.begin(0x76)) {
-        Serial.println("BME280 found");
-        hasBme280 = true;
-    } else {
-        Serial.println("BME280 not found");
-    }
-
-    Serial.println("-- Current GPIO Configuration --");
-    Serial.printf("PIN_UART_RX: %d\n", SerialCom::PIN_UART_RX);
-
-    mqttReconnect();
+    autoconfPayload.clear();
 }
 
 void setupOTA() {
@@ -126,28 +132,6 @@ void setupOTA() {
     // This is less of a security measure and more a accidential flash prevention
     ArduinoOTA.setPassword(identifier);
     ArduinoOTA.begin();
-}
-
-void loop() {
-    ArduinoOTA.handle();
-    SerialCom::handleUart(state);
-    mqttClient.loop();
-
-    const uint32_t currentMillis = millis();
-    if (currentMillis - statusPublishPreviousMillis >= statusPublishInterval) {
-        statusPublishPreviousMillis = currentMillis;
-
-        if (state.valid) {
-            printf("Publish state\n");
-            publishState();
-        }
-    }
-
-    if (!mqttClient.connected() && currentMillis - lastMqttConnectionAttempt >= mqttConnectionInterval) {
-        lastMqttConnectionAttempt = currentMillis;
-        printf("Reconnect mqtt\n");
-        mqttReconnect();
-    }
 }
 
 void setupWifi() {
@@ -186,7 +170,10 @@ void mqttReconnect() {
     for (uint8_t attempt = 0; attempt < 3; ++attempt) {
         if (mqttClient.connect(identifier, Config::username, Config::password, MQTT_TOPIC_AVAILABILITY, 1, true, AVAILABILITY_OFFLINE)) {
             mqttClient.publish(MQTT_TOPIC_AVAILABILITY, AVAILABILITY_ONLINE, true);
-            publishAutoConfig();
+            
+            if (shouldSendHassAutoconfig) {
+                publishAutoConfig();
+            }
 
             // Make sure to subscribe after polling the status so that we never execute commands with the default data
             mqttClient.subscribe(MQTT_TOPIC_COMMAND);
@@ -230,48 +217,70 @@ void publishState() {
 
 void mqttCallback(char* topic, uint8_t* payload, unsigned int length) { }
 
-void publishAutoConfig() {
-    char mqttPayload[2048];
-    DynamicJsonDocument device(256);
-    DynamicJsonDocument autoconfPayload(1024);
-    StaticJsonDocument<64> identifiersDoc;
-    JsonArray identifiers = identifiersDoc.to<JsonArray>();
+void setup() {
+    Serial.begin(115200);
+    SerialCom::setup();
 
-    identifiers.add(identifier);
+    Serial.println("\n");
+    Serial.println("Hello from esp8266-vindriktning-particle-sensor");
+    Serial.printf("Core Version: %s\n", ESP.getCoreVersion().c_str());
+    Serial.printf("Boot Version: %u\n", ESP.getBootVersion());
+    Serial.printf("Boot Mode: %u\n", ESP.getBootMode());
+    Serial.printf("CPU Frequency: %u MHz\n", ESP.getCpuFreqMHz());
+    Serial.printf("Reset reason: %s\n", ESP.getResetReason().c_str());
 
-    device["identifiers"] = identifiers;
-    device["manufacturer"] = "Ikea";
-    device["model"] = "VINDRIKTNING";
-    device["name"] = identifier;
-    device["sw_version"] = "2021.08.0";
+    delay(3000);
 
-    autoconfPayload["device"] = device.as<JsonObject>();
-    autoconfPayload["availability_topic"] = MQTT_TOPIC_AVAILABILITY;
-    autoconfPayload["state_topic"] = MQTT_TOPIC_STATE;
-    autoconfPayload["name"] = identifier + String(" WiFi");
-    autoconfPayload["value_template"] = "{{value_json.wifi.rssi}}";
-    autoconfPayload["unique_id"] = identifier + String("_wifi");
-    autoconfPayload["unit_of_measurement"] = "dBm";
-    autoconfPayload["json_attributes_topic"] = MQTT_TOPIC_STATE;
-    autoconfPayload["json_attributes_template"] = "{\"ssid\": \"{{value_json.wifi.ssid}}\", \"ip\": \"{{value_json.wifi.ip}}\"}";
-    autoconfPayload["icon"] = "mdi:wifi";
+    snprintf(identifier, sizeof(identifier), "VINDRIKTNING-%X", ESP.getChipId());
+    snprintf(MQTT_TOPIC_AVAILABILITY, 127,  "%s/%X/status",  mqttTopicPrefix.c_str(), ESP.getChipId());
+    snprintf(MQTT_TOPIC_STATE, 127,         "%s/%X/state",   mqttTopicPrefix.c_str(), ESP.getChipId());
+    snprintf(MQTT_TOPIC_COMMAND, 127,       "%s/%X/command", mqttTopicPrefix.c_str(), ESP.getChipId());
 
-    serializeJson(autoconfPayload, mqttPayload);
-    mqttClient.publish(&MQTT_TOPIC_AUTOCONF_WIFI_SENSOR[0], &mqttPayload[0], true);
+    WiFi.hostname(identifier);
 
-    autoconfPayload.clear();
+    Config::load();
 
-    autoconfPayload["device"] = device.as<JsonObject>();
-    autoconfPayload["availability_topic"] = MQTT_TOPIC_AVAILABILITY;
-    autoconfPayload["state_topic"] = MQTT_TOPIC_STATE;
-    autoconfPayload["name"] = identifier + String(" PM 2.5");
-    autoconfPayload["unit_of_measurement"] = "μg/m³";
-    autoconfPayload["value_template"] = "{{value_json.pm25}}";
-    autoconfPayload["unique_id"] = identifier + String("_pm25");
-    autoconfPayload["icon"] = "mdi:air-filter";
+    setupWifi();
+    setupOTA();
+    mqttClient.setServer(Config::mqtt_server, 1883);
+    mqttClient.setKeepAlive(10);
+    mqttClient.setBufferSize(2048);
+    mqttClient.setCallback(mqttCallback);
 
-    serializeJson(autoconfPayload, mqttPayload);
-    mqttClient.publish(&MQTT_TOPIC_AUTOCONF_PM25_SENSOR[0], &mqttPayload[0], true);
+    Serial.printf("Hostname: %s\n", identifier);
+    Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
 
-    autoconfPayload.clear();
+    if (bme.begin(0x76)) {
+        Serial.println("BME280 found");
+        hasBme280 = true;
+    } else {
+        Serial.println("BME280 not found");
+    }
+
+    Serial.println("-- Current GPIO Configuration --");
+    Serial.printf("PIN_UART_RX: %d\n", SerialCom::PIN_UART_RX);
+
+    mqttReconnect();
+}
+
+void loop() {
+    ArduinoOTA.handle();
+    SerialCom::handleUart(state);
+    mqttClient.loop();
+
+    const uint32_t currentMillis = millis();
+    if (currentMillis - statusPublishPreviousMillis >= statusPublishInterval) {
+        statusPublishPreviousMillis = currentMillis;
+
+        if (state.valid) {
+            printf("Publish state\n");
+            publishState();
+        }
+    }
+
+    if (!mqttClient.connected() && currentMillis - lastMqttConnectionAttempt >= mqttConnectionInterval) {
+        lastMqttConnectionAttempt = currentMillis;
+        printf("Reconnect mqtt\n");
+        mqttReconnect();
+    }
 }
