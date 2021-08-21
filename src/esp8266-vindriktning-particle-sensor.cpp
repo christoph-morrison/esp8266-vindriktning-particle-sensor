@@ -5,6 +5,7 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 #include <WiFiManager.h>
+#include <Adafruit_BME280.h>
 
 #include "Config.h"
 #include "SerialCom.h"
@@ -40,6 +41,11 @@ char MQTT_TOPIC_AUTOCONF_WIFI_SENSOR[128];
 char MQTT_TOPIC_AUTOCONF_PM25_SENSOR[128];
 
 bool shouldSaveConfig = false;
+
+
+#define SEALEVELPRESSURE_HPA (1017.25)
+Adafruit_BME280 bme; // I2C
+bool hasBme280 = false;
 
 void saveConfigCallback() {
     shouldSaveConfig = true;
@@ -80,6 +86,13 @@ void setup() {
 
     Serial.printf("Hostname: %s\n", identifier);
     Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+
+    if (bme.begin(0x76)) {
+        Serial.println("BME280 found");
+        hasBme280 = true;
+    } else {
+        Serial.println("BME280 not found");
+    }
 
     Serial.println("-- Current GPIO Configuration --");
     Serial.printf("PIN_UART_RX: %d\n", SerialCom::PIN_UART_RX);
@@ -199,6 +212,14 @@ void publishState() {
     stateJson["pm25"] = state.avgPM25;
 
     stateJson["wifi"] = wifiJson.as<JsonObject>();
+    if (hasBme280) {
+        DynamicJsonDocument bmeJson(192);
+        bmeJson["temperature"] = bme.readTemperature();
+        bmeJson["pressure"]    = bme.readPressure() / 100.0F;
+        bmeJson["altitude"]    = bme.readAltitude(SEALEVELPRESSURE_HPA);
+        bmeJson["humidity"]    = bme.readHumidity();
+        stateJson["bme280"]    = bmeJson.as<JsonObject>();
+    }
 
     serializeJson(stateJson, payload);
     mqttClient.publish(&MQTT_TOPIC_STATE[0], &payload[0], true);
