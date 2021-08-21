@@ -202,16 +202,16 @@ bool isMqttConnected() {
 
 void publishState() {
     DynamicJsonDocument wifiJson(192);
-    DynamicJsonDocument stateJson(604);
+    DynamicJsonDocument pmJson(192);
+    DynamicJsonDocument stateJson(1024);
     char payload[256];
 
-    wifiJson["ssid"] = WiFi.SSID();
-    wifiJson["ip"] = WiFi.localIP().toString();
-    wifiJson["rssi"] = WiFi.RSSI();
+    wifiJson["ssid"]    = WiFi.SSID();
+    wifiJson["ip"]      = WiFi.localIP().toString();
+    wifiJson["rssi"]    = WiFi.RSSI();
 
-    stateJson["pm25"] = state.avgPM25;
+    pmJson["pm25"]      = state.avgPM25;  
 
-    stateJson["wifi"] = wifiJson.as<JsonObject>();
     if (hasBme280) {
         DynamicJsonDocument bmeJson(192);
         bmeJson["temperature"] = bme.readTemperature();
@@ -220,6 +220,9 @@ void publishState() {
         bmeJson["humidity"]    = bme.readHumidity();
         stateJson["bme280"]    = bmeJson.as<JsonObject>();
     }
+
+    stateJson["particle_sensor"] = pmJson.as<JsonObject>();
+    stateJson["wifi"]            = wifiJson.as<JsonObject>();
 
     serializeJson(stateJson, payload);
     mqttClient.publish(&MQTT_TOPIC_STATE[0], &payload[0], true);
