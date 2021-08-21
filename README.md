@@ -1,13 +1,13 @@
-<p align="center"><h2>MQTT connectivity for the Ikea VINDRIKTNING</h2></p>
-
+# MQTT connectivity for the Ikea VINDRIKTNING
 
 This repository contains an ESP8266 firmware, which adds MQTT to the Ikea VINDRIKTNING PM2.5 air quality sensor.
-The modification  doesn't interfere with normal operation of the device in any way.
+The modification doesn't interfere with normal operation of the device in any way.
 The ESP8266 just adds another data sink beside the colored LEDs.
+I also added an BME280 for temperature, humidity and air pressure.
 
 ![half_assembled](./img/half-assembled.jpg)
 
-Home Assistant Autodiscovery is supported.
+Home Assistant Autodiscovery is supported, but optional.
 Furthermore, the WifiManager library is used for on-the-fly configuration.
 Also, ArduinoOTA is used, so that firmware updates are possible even with a reassembled device.
 
@@ -22,11 +22,13 @@ To extend your air quality sensor, you will need
 - Some short dupont cables
 - A soldering iron
 - A long PH0 Screwdriver (e.g. Wera 118022)
+- Optional a BME280
 
-Fortunately, there is a lot of unused space in the enclosure, which is perfect for our ESP8266.
+Fortunately, there is a lot of unused space in the enclosure, which is perfect for our ESP8266 and the BME280.
 Also, everything we need is accessible via easy to solder testpoints.
 
 ## Hardware
+### ESP8266
 
 To install the ESP8266, you need to unscrew the four visible screws in the back of the enclosure.
 
@@ -39,9 +41,13 @@ of accidentally melting some plastic.
 As you can see in this image, you'll need to solder wires to GND, 5V and the Testpoint that is connected to TX of the
 Particle Sensor.
 
-Then just connect these Wires to GND, VIN (5V) and D2 (if you're using a Wemos D1 Mini).
+Then just connect these Wires to GND, VIN (5V) and D5 (if you're using a Wemos D1 Mini).
+### BME280
 
-Done.
+If you want to add a BME280, just connect 5V from the sensor board to `VIN`, `GND`from the sensor board or Wemos D1 to `GND`, 
+`D1` from the Wemos D1 to `SCL` and finally `D2` from the Wemos D1 to `SCA`.
+
+Place both without obstructing the air flow in the enclosure.
 
 ## Software
 
@@ -55,7 +61,17 @@ Furthermore, you will also need to install the following libraries using the Lib
 * ArduinoJSON 6.10.1
 * PubSubClient 2.8.0
 * WiFiManager 0.15.0
+* Adafruit BusIO
+* Adafruit BME280
 
+### Configure
+
+Before building, you must configure three options:
+
+* `hasBme280` - `true` if a BME280 is used, `false` if not (default is `false`)
+* `shouldSendHassAutoconfig`  - `true` if Home Assistant autoconfig should be send, `false` if not (default is `false`)
+* `mqttTopicPrefix` - Set to your preferred MQTT topic, e.g. the default `hab/devices/sensors/environment/particle-sensor`. 
+    Values will be send to `<mqttTopicPrefix>/<CHIP-UID/state` and `<mqttTopicPrefix>/<CHIP-UID/status`
 
 Just build, flash, and you're done.
 
