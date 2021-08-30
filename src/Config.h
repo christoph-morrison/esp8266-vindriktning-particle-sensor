@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 #include <FS.h>
+#include <LittleFS.h>
 
 namespace Config {
     char mqtt_server[80] = "example.tld";
@@ -15,7 +16,7 @@ namespace Config {
         json["username"] = username;
         json["password"] = password;
 
-        File configFile = SPIFFS.open("/config.json", "w");
+        File configFile = LittleFS.open("/config.json", "w");
         if (!configFile) {
             return;
         }
@@ -25,10 +26,10 @@ namespace Config {
     }
 
     void load() {
-        if (SPIFFS.begin()) {
+        if (LittleFS.begin()) {
 
-            if (SPIFFS.exists("/config.json")) {
-                File configFile = SPIFFS.open("/config.json", "r");
+            if (LittleFS.exists("/config.json")) {
+                File configFile = LittleFS.open("/config.json", "r");
 
                 if (configFile) {
                     const size_t size = configFile.size();
